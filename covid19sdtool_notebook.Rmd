@@ -1,0 +1,743 @@
+---
+title: "COVID-19 subgroup discovery on the nCov2019 dataset"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    theme: united
+    highlight: tango
+author: |
+        | Carlos Sáez^1^, Nekane Romero^1^, J Alberto Conejero^2^, Juan M García-Gómez^1^
+        | 
+        | ^1^Biomedical Data Science Lab, Instituto Universitario de Tecnologías de la Información y Comunicaciones (ITACA), Universitat Politècnica de València (UPV), Camino de Vera s/n, Valencia 46022, España. ^2^Instituto Universitario de Matemática Pura y Aplicada (IUMPA), Universitat Politécnica de València, Valencia, Spain.
+        | Corresponding author: Carlos Sáez <carsaesi@upv.es>
+date: "July 9, 2020"
+
+---
+<!-- Copyright 2020 Biomedical Data Science Lab, Universitat Politècnica de València (Spain) -->
+<!-- -->
+<!-- Licensed under the Apache License, Version 2.0 (the "License"); -->
+<!-- you may not use this file except in compliance with the License. -->
+<!-- You may obtain a copy of the License at -->
+<!-- -->
+<!-- http://www.apache.org/licenses/LICENSE-2.0 -->
+<!-- -->
+<!-- Unless required by applicable law or agreed to in writing, software -->
+<!-- distributed under the License is distributed on an "AS IS" BASIS, -->
+<!-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. -->
+<!-- See the License for the specific language governing permissions and -->
+<!-- limitations under the License. -->
+
+# Introduction
+
+This document reports the code for the discovery of COVID-19 subgroups by symptoms and comorbidities, evaluated on the nCov2019 open dataset. This document, as well as the supporting functions required for its execution, are available in the [COVID-19-SDE-Tool](https://github.com/carsaesi/covid19sdtool) GitHub repository.
+
+The COVID-19 infectious disease has led since December 2019 to a worldwide pandemic which is still under control measures. Researchers worldwide are making huge efforts aiming to a comprehensive understanding of the COVID-19 and related healthcare treatments. This work shows the preliminary results of a Machine Learning (ML) approach to identify subgroups of COVID-19 patients based on their symptoms and comorbidities, aiming to a better understanding of variability of severity patterns. In this work, we particularly address the variability (or heterogeneity) between distinct sources populating the research repositories, given the potential impact that this variability may have in data science and the generalization of its results.
+
+We analyzed the raw nCov-2019 dataset release at 2020-05-11. The [nCoV2019](https://github.com/beoutbreakprepared/nCoV2019) dataset comprises a collection of publicly available information on worldwide cases confirmed during the ongoing nCoV2019 outbreak. We included those cases were at least one symptom and an outcome were available. Then, we fixed duplicates and homogenized values in outcomes, comorbidities and symptoms. We mapped the latter to ICD-10 terms. The final sample included 170 cases.
+
+Then, we applied a Multiple Correspondence Analysis 3-dimensional embedding of symptoms and outcomes and a hierarchical clustering. The proper number of clusters for both age-independent and age group analyses were selected by supervised inspection of group consistency.
+
+We found clinically meaningful patient subgroups based on symptoms and comorbidities for specific age groups and age-independent analyses. However, the two most prevalent source countries were divided into separate subgroups with different manifestations of severity.
+
+If you use this code please cite:
+
+<blockquote style='font-size:14px'>Carlos Sáez, Nekane Romero, J Alberto Conejero, Juan M García-Gómez. Potential Biases in COVID-19 Machine Learning due to Data Source Variability. Submitted. </blockquote>
+
+If you are interested in collaborating in this work please [contact us](mailto:carsaesi@upv.es).
+
+For further exploration of the results please visit our [COVID-19 Subgroup Discovery and Exploration Tool (COVID-19 SDE Tool)](http://covid19sdetool.upv.es/).
+
+# Setup
+
+Install and load the required packages.
+
+```{r setup, eval=TRUE, message=FALSE, warning=FALSE}
+installedPackages = rownames(installed.packages())
+if(! "text2vec" %in% installedPackages)
+{install.packages("text2vec")}
+if(! "plotly" %in% installedPackages)
+{install.packages("plotly")}
+if(! "factoextra" %in% installedPackages)
+{install.packages("factoextra")}
+if(! "FactoMineR" %in% installedPackages)
+{install.packages("FactoMineR")}
+if(! "MVN" %in% installedPackages)
+{install.packages("MVN")}
+if(! "RColorBrewer" %in% installedPackages)
+{install.packages("RColorBrewer")}
+if(! "kableExtra" %in% installedPackages)
+{install.packages("kableExtra")}
+if(! "dplyr" %in% installedPackages)
+{install.packages("dplyr")}
+if(! "stringr" %in% installedPackages)
+{install.packages("stringr")}
+
+library(text2vec)
+library(plotly)
+library(factoextra)
+library(FactoMineR)
+library(MVN)
+library(RColorBrewer)
+library(kableExtra)
+library(dplyr)
+library(stringr)
+
+```
+
+Source the required functions. These can be found at the [COVID-19-SDE-Tool](https://github.com/carsaesi) GitHub repository. We recommended to download the whole repository, which includes this document `.Rmd` file.
+
+```{r functions, eval=TRUE, message=FALSE, warning=FALSE}
+source('R/performDeDuplication.R')
+source('R/performWord2Vec.R')
+source('R/pCI.R')
+source('R/mCI.R')
+```
+
+# Data loading
+
+Load the nCov2019 dataset at 2020-05-11. Check the variables set if you plan to use other versions of the dataset.
+
+```{r dataLoad, eval=TRUE, message=FALSE, warning=FALSE}
+
+dataDate = '2020-05-11'
+untar(paste0('data/latestdata_',dataDate,'.tar.gz'), exdir = "data")
+filename = paste0('data/latestdata_',dataDate,'.csv')
+
+data = read.csv2(filename, sep = ",", header = TRUE, na.strings = "", stringsAsFactors = FALSE, dec = '.',
+                   colClasses = c( "character", #id
+                                   "character", #age [TO CONVERT TO NUMERIC]
+                                   "character", #sex
+                                   "character", #city
+                                   "character", #province
+                                   "character", #country
+                                   # "factor",  #wuhan.0._not_wuhan.1
+                                   "character", #latitude [TO CONVERT TO NUMERIC]
+                                   "character", #longitude [TO CONVERT TO NUMERIC]
+                                   "character", #geo_resolution
+                                   "character", #date_onset_symptoms [TO CONVERT TO DATE]
+                                   "character", #date_admission_hospital [TO CONVERT TO DATE]
+                                   "character", #date_confirmation [MAIN DATE FOR ANALYSIS (mostly complete), TO CONVERT TO DATE]
+                                   "character", #symptoms [TO SPLIT AND PREPROCESS]
+                                   "character", #lives_in_wuhan
+                                   "character", #travel_history_dates
+                                   "character", #travel_history_location
+                                   "character", #reported_market_exposure
+                                   "character", #additional_information
+                                   "character", #chronic_disease_binary
+                                   "character", #chronic_disease
+                                   "character", #source
+                                   "character", #sequence_available
+                                   "character", #outcome
+                                   "character", #date_death_or_discharge [TO CONVERT TO DATE]
+                                   "character", #notes_for_discussion
+                                   "character", #location
+                                   "character", #admin3
+                                   "character", #admin2
+                                   "character", #admin1
+                                   "character", #country_new
+                                   "character", #admin_id
+                                   "character", #data_moderator_initials
+                                   "character"  #travel_history_binary
+                   ))
+```
+
+Convert and derive variables.
+  
+```{r dataVariableConversion, eval=TRUE, message=FALSE, warning=FALSE}
+
+# convert some variable types
+data$ageNum = as.numeric(data$age) # Note: Some textual ranges are set as NA (e.g, 16-80), which could be set in another variable
+data$ageCat = vector(mode = "character", length = nrow(data))
+# make age groups <17, 18-49, 50-64, >65
+idsLeq17  = data$ageNum <= 17
+ids18to49 = data$ageNum > 17 & data$ageNum <= 49
+ids50to64 = data$ageNum > 49 & data$ageNum <= 64
+idsGeq65  = data$ageNum > 64
+data$ageCat[idsLeq17] = '<17'
+data$ageCat[ids18to49] = '18-49'
+data$ageCat[ids50to64] = '50-64'
+data$ageCat[idsGeq65] = '>65'
+
+# set confirmation date as main date, keep the others as difference to the former
+data$date_confirmation = as.Date(data$date_confirmation, "%d.%m.%Y")
+data$date_onset_symptoms = as.Date(data$date_onset_symptoms, "%d.%m.%Y")
+data$date_admission_hospital = as.Date(data$date_admission_hospital, "%d.%m.%Y")
+data$date_death_or_discharge = as.Date(data$date_death_or_discharge, "%d.%m.%Y")
+data$date_onset_symptoms_difconf = as.numeric(data$date_onset_symptoms-data$date_confirmation )
+data$date_admission_hospital_difconf = as.numeric(data$date_admission_hospital-data$date_confirmation )
+data$date_death_or_discharge_difconf = as.numeric(data$date_death_or_discharge-data$date_confirmation )
+data$date_death_or_discharge_difadm = as.numeric(data$date_death_or_discharge-data$date_admission_hospital )
+data$date_death_or_discharge_difsym = as.numeric(data$date_death_or_discharge-data$date_onset_symptoms )
+
+```
+
+Select subdataset with non-missing symptoms and outcomes (assuming missing chronic diseases mean an absence of them).
+
+```{r dataSelection, eval=TRUE, message=FALSE, warning=FALSE}
+
+data_symptoms_outcome = data[which(!is.na(data$symptoms) & !is.na(data$outcome)),]
+
+```
+
+# Data preparation
+
+Includes the semantic processing of variables through homogenization of clinical terms, and additional data filtering.
+
+## Semantic preprocessing of symptoms, comorbidities and outcomes
+
+### Preprocessing of outcomes
+
+```{r semanticProcessingOutcomes, eval=TRUE, message=FALSE, warning=FALSE}
+
+outcomeLists = lapply(data_symptoms_outcome$outcome, tolower)
+outcomeLists = lapply(outcomeLists, function(x) gsub("\\<discharge\\>|\\<discharged\\>|\\<stable\\>|\\<recovered\\>", "Recovered", x))
+outcomeLists = lapply(outcomeLists, function(x) gsub("\\<death\\>|\\<dead\\>|\\<deceased\\>|\\<died\\>", "Deceased", x))
+
+data_symptoms_outcome$outcome2 = sapply(outcomeLists, paste, collapse  = " ")
+validOutcomes = data_symptoms_outcome$outcome2 %in% c("Recovered","Deceased")
+
+data_symptoms_outcome = data_symptoms_outcome[validOutcomes,]
+
+```
+
+### Preprocessing of list of comorbidities
+
+```{r semanticProcessingChronic, eval=TRUE, message=FALSE, warning=FALSE}
+
+chronicTable = read.csv2('data/chronic_diseases.csv', sep = ";", header = TRUE, na.strings = "", stringsAsFactors = FALSE)
+chronicTable = chronicTable[,c(1,4)]
+
+chronicLists = sapply(data_symptoms_outcome$chronic_disease, strsplit, "\\,|;|:|and")
+chronicLists = lapply(chronicLists, str_trim)
+chronicLists = lapply(chronicLists, tolower)
+chronicLists = lapply(chronicLists, str_replace_all, " ", "_")
+
+# write.csv2(unique(unlist(chronicLists)), "chronic_diseases_R.csv", row.names = FALSE, quote = FALSE)
+chronicLists = lapply(chronicLists, function(x) chronicTable$group[match(unlist(x), chronicTable$text)])
+
+data_symptoms_outcome$chronic_disease2 = sapply(chronicLists, paste, collapse  = " ")
+
+```
+
+### Preprocessing of list of symptoms
+
+```{r semanticProcessingSymptoms, eval=TRUE, message=FALSE, warning=FALSE}
+
+# split symptoms texts into vector of (yet unprocessed) symptoms
+symptomsLists = sapply(data_symptoms_outcome$symptoms, strsplit, "\\,|;|:|and")
+# trim blank spaces
+symptomsLists = lapply(symptomsLists, str_trim)
+# to lowercase
+symptomsLists = lapply(symptomsLists, tolower)
+# replace blank spaces with underscore
+symptomsLists = lapply(symptomsLists, str_replace_all, " ", "_")
+
+# single replacings of synonyms
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<loss_of_apetite\\>", "anorexia", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<pleuritic_chest_pain\\>", "chest_pain", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<diarrhoea\\>", "diarrhea", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<cardiac_arrythmia\\>", "arrythmia", x))
+
+# multiple replacings of synonyms
+# RESPIRATORY 
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<acute_rhinitis\\>|\\<acute_pharyngitis\\>|\\<nasal_congestion\\>|\\<nasal_discharge\\>|\\<rhinhorrea\\>|\\<coryza\\>|\\<coriza\\>|\\<runny_nose\\>|\\<running_nose\\>|\\<pharyngeal_dryness\\>|\\<pharyngeal_discomfort\\>|\\<sore_throat\\>|\\<colds\\>|\\<dysphagia\\>|\\<dry_throat\\>|\\<throat_discomfort\\>|\\<pharyngalgia\\>|\\<flu_like_symptoms\\>|\\<cold\\>|\\<colds\\>", "acute_nasopharyngitis", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<coughing|.+cough", "cough", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<acute_respiratory_distress\\>|\\<acute_respiratory_distress_syndrome\\>|<acute_respiratory_disease_syndrome\\>", "ards", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<difficulty_breathing\\>|\\<shortness_of_breath\\>|\\<chest_distress\\>|\\<chest_myalgia\\>|\\<chest_tightness\\>|\\<chest_discomfort\\>\\<chest_fatigue\\>|\\<respiratory_problems\\>|\\<gasp\\>|\\<grasp\\>|\\<breathing_difficulty\\>|\\<respiratory_complaints\\>", "dyspnea", x)) 
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<sputum\\>|\\<little_sputum\\>|\\<phlegm\\>|\\<little_expectoration\\>", "expectoration", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<severe_acute_respiratory_infection\\>|\\<severepneumonia\\>", "pneumonia severe_pneumonia", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<pneumonitis\\>|\\<mild_pneumonia\\>|\\<lesions_on_chest_radiographs\\>", "pneumonia", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<acute_respiratory_failure\\>|\\<hypoxia\\>|\\<hypercapnia\\>", "respiratory_failure", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<acute_respiratory_disease\\>", "unspecified_respiratory_disease", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<sepsis\\>", "\\<septic_shock\\>", x))
+# NON RESPIRATORY
+symptomsLists = lapply(symptomsLists, function(x) gsub("fever.+|\\<chills\\>|.+chill|\\<sensation_of_chill\\>", "fever", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<acute_renal_failure\\>|\\<prerenal_failure\\>|\\<kidney_failure\\>", "acute_kidney_injury", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<eye_irritation\\>|\\<red_eye\\>", "conjunctivitis", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<joint_pain\\>|\\<joint_tenderness\\>", "arthralgia", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<dizziness\\>|\\<transientfatigue\\>|\\<transient_fatigue\\>|\\<discomfort\\>|\\<body_malaise\\>|\\<exhaustion\\>|\\<feeling_ill\\>|\\<general_malaise\\>|\\<general_weakness\\>|\\<lack_of_energy\\>|\\<lethargy\\>|\\<malaise\\>|\\<systemic_weakness\\>|\\<iredness\\>|\\<general_weakness\\>|\\<weak\\>|\\<weakness\\>|\\<weaknessness\\>|\\<fatigure\\>", "fatigue", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("+.myalgia|\\<myalgias\\>|\\<aching_muscles\\>|\\<backache\\>|\\<bone_pain\\>|\\<body_ache\\>|\\<milagia\\>|\\<mialgia\\>|\\<muscle_soreness\\>|\\<muscular_soreness\\>|\\<muscle_pain\\>|\\<musculoskeletal_pain\\>|\\<muscular_stiffness\\>|\\<pain\\>", "myalgia", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<nausea\\>|\\<vomiting\\>|\\<vomits\\>|\\<emesis\\>", "nausea_vomiting", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<drowsiness\\>|\\<somnolence\\>|\\<obnubilation\\>", "altered_conciousness_mild", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<congestive_heart_failure\\>|\\<myocardial_dysfunction\\>", "heart_failure", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<infarction\\>|\\<myocardial_infarction\\>|\\<acute_myocardial_infarction\\>", "acute_coronary_syndrome", x))
+# symptomsLists = lapply(symptomsLists, function(x) gsub("\\<asymptomatic\\>|\\<none\\>", "NA", x))
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<asymptomatic\\>|\\<none\\>|\\<afebrile\\>", "", x))
+
+# deletion of not informative texts
+
+symptomsLists = lapply(symptomsLists, function(x) gsub("\\<19_related_symptoms\\>|\\<covid\\>|\\<severe\\>|\\<between_others\\>|\\<mild\\>|\\<moderate\\>|\\<hypertension\\>", "", x))
+#Note: further use of modulators could be revised
+#Note: patients with severe only have that value
+
+symptomsLists = lapply(symptomsLists, function(x) x[sapply(x, str_length)>0])
+
+# join again in a new column for automatic word vector creation
+data_symptoms_outcome$symptoms2 = sapply(symptomsLists, paste, collapse  = " ")
+
+```
+
+## Additional preprocessing
+
+Filter by valid age and remove duplicated entries.
+
+```{r additionalProcessing, eval=TRUE, message=FALSE, warning=FALSE}
+
+data_symptoms_outcome = data_symptoms_outcome[!is.na(data_symptoms_outcome$ageNum),]
+
+data_symptoms_outcome = performDeDuplication(data_symptoms_outcome)
+
+```
+
+## Selection of Age group [!]
+
+**To continue with the remaining code please select one of the following chunks of code to execute depending on which Age group you want to analyze.** These chunks include the selection of a subset of data for the corresponding age, and setting `k` as the best number of clusters for each group after a supervised expert review. **For the following results we ran the "All ages" group**.
+
+Analysis with all ages:
+
+```{r ageAll, eval=TRUE, message=FALSE, warning=FALSE}
+dataExperiment = data_symptoms_outcome
+bestk = 6
+```
+
+Analysis with ages >65 years:
+
+```{r age65, eval=FALSE, message=FALSE, warning=FALSE}
+dataExperiment = data_symptoms_outcome[data_symptoms_outcome$ageCat == '>65',]
+bestk = 3
+```
+
+Analysis with ages between 50-64 years:
+
+```{r age5064, eval=FALSE, message=FALSE, warning=FALSE}
+dataExperiment = data_symptoms_outcome[data_symptoms_outcome$ageCat == '50-64',]
+bestk = 4
+```
+
+Analysis with ages between 18-49 years:
+
+```{r age1849, eval=FALSE, message=FALSE, warning=FALSE}
+dataExperiment = data_symptoms_outcome[data_symptoms_outcome$ageCat == '18-49',]
+bestk = 4
+```
+
+
+## Vocabulary and word tokenization
+
+To perform the tokenization of symptoms and comorbidities, provided as a list, we use the `performWord2Vec` function of the repository.
+
+```{r word2vec, eval=TRUE, message=FALSE, warning=FALSE}
+
+# Word vectors with word2vec for symptoms
+resultsWord2VecSymptoms = performWord2Vec(dataExperiment, targetVariable = 'symptoms2')
+
+# filter out of vocabulary individuals
+symptomsVector = resultsWord2VecSymptoms$textsVector[resultsWord2VecSymptoms$idsValidTexts,]
+dataExperiment = dataExperiment[resultsWord2VecSymptoms$idsValidTexts,]
+
+## print those symptoms not included to improve filtering (as a check)
+# data_symptoms_outcome[!resultsWord2VecSymptoms$idsValidTexts,"symptoms"]
+
+# Word vectors with word2vec for chronic diseases
+resultsWord2VecChronic = performWord2Vec(dataExperiment, targetVariable = 'chronic_disease2')
+
+# filter out of vocabulary individuals
+chronicsVector = resultsWord2VecChronic$textsVector[resultsWord2VecChronic$idsValidTexts,]
+dataExperiment = dataExperiment[resultsWord2VecChronic$idsValidTexts,]
+symptomsVector = symptomsVector[resultsWord2VecChronic$idsValidTexts,]
+
+
+```
+
+# Subgroup discovery
+
+Prepare data for analysis, joining symptoms and comorbidities cin a single `data.frame` and selecting a set of metadata to complement results.
+
+```{r analysisPrep, eval=TRUE, message=FALSE, warning=FALSE}
+
+symptomsVector = data.frame(symptomsVector)
+colnames(symptomsVector) = paste0("S_",colnames(symptomsVector))
+
+chronicsVector = data.frame(chronicsVector)
+colnames(chronicsVector) = paste0("C_",colnames(chronicsVector))
+
+data_analysis = cbind(symptomsVector, chronicsVector)
+data_analysis = sapply(data_analysis, as.logical)
+
+data_analysis_metadata = dataExperiment[,c("ageNum", "ageCat", "sex", "country", "source", "date_death_or_discharge_difsym")]
+data_analysis_metadata$Outcome = dataExperiment$outcome2
+
+```
+
+## Dimensionality reduction
+
+Perform Multiple Correspondence Analysis on 3 dimensions.
+
+```{r analysisMCA, eval=TRUE, message=FALSE, warning=FALSE}
+res.mca = MCA(data_analysis, ncp = 3, graph = FALSE)
+
+# fviz_screeplot(res.mca, addlabels = TRUE, ylim = c(0, 45))
+
+ind = res.mca$ind
+var = res.mca$var
+
+```
+
+## Clustering
+
+Perform hierarchical clustering and cut the resultant tree using the best number of clusters `k` defined above.
+
+```{r analysisClustering, eval=TRUE, message=FALSE, warning=FALSE}
+distEuclideanMCA = dist(ind$coord)
+clusterdistEuclideanMCA = hclust(distEuclideanMCA, method = "ward.D2")
+
+groups <- cutree(clusterdistEuclideanMCA, k=bestk)
+sizes <- dataExperiment$ageNum
+
+resultsClustering = list("ind" = ind, "clusterdistEuclideanMCA" = clusterdistEuclideanMCA, "k" = bestk, "groups" = groups, "sizes" = sizes)
+
+```
+
+# Results visualizations
+
+In the following results the information about the subgroups is consistent within scatter plots, histograms and detailed table, and correspond to the subgroups found in the previous application of clustering to the selected Age group with the corresponding number of clusters `k`.
+
+Perform first some preparation to facilitate visualizations.
+
+```{r plotsPrep, eval=TRUE, message=FALSE, warning=FALSE}
+# selection of true symptoms and comorbidities values from MCA
+trues = endsWith(names(res.mca$call$marge.col), "TRUE")
+coord_T = var$coord[trues,]
+rownames(coord_T) = substr(rownames(coord_T),1,nchar(rownames(coord_T))-5)
+
+coord_T_S = coord_T[1:ncol(symptomsVector),]
+rownames(coord_T_S) = substr(rownames(coord_T_S),3,nchar(rownames(coord_T_S)))
+coord_T_C = coord_T[-(1:ncol(symptomsVector)),]
+rownames(coord_T_C) = substr(rownames(coord_T_C),3,nchar(rownames(coord_T_C)))
+
+# configuration of scatter properties
+markerSize2d = 35
+markerSize2ddiamond = 25
+markerSize3d = 300
+markerSize3ddiamond = 250
+
+axx <- list(
+  title = "1<sup>st</sup> component"
+)
+axy <- list(
+  title = "2<sup>nd</sup> component"
+)
+axz <- list(
+  title = "3<sup>rd</sup> component"
+)
+
+# color resources
+colorsVars = brewer.pal(n = 2, name = "BrBG")
+
+```
+
+## Case embeddings in 2D and 3D scatters
+
+### Subgroups
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+pClusters2d <- plot_ly(x = resultsClustering$ind$coord[,1], y = resultsClustering$ind$coord[,2],
+              color = as.factor(paste("Subgroup",format(resultsClustering$groups, digits=2))),
+              size = I(markerSize2d), type = "scatter", mode = "markers",
+              text = paste0("Patient ID: ",rownames(resultsClustering$ind$coord),"\n Age:",resultsClustering$sizes),
+              marker = list(sizemode = 'area'),
+              scene = 'sceneClusters') %>%
+  layout(title = "Subgroups (obtained at 3D, switch to 3D for better display)", xaxis = axx, yaxis = axy) %>% 
+  config(displaylogo = FALSE)
+pClusters2d
+```
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+pClusters3d <- plot_ly(x = resultsClustering$ind$coord[,1], y = resultsClustering$ind$coord[,2], z = resultsClustering$ind$coord[,3],
+              color = as.factor(paste("Subgroup",format(resultsClustering$groups, digits=2))),
+              size = I(markerSize3d), type = "scatter3d", mode = "markers",
+              text = paste0("Patient ID: ",rownames(resultsClustering$ind$coord),"\n Age:",resultsClustering$sizes),
+              marker = list(sizemode = 'area'),
+              scene = 'sceneClusters') %>%
+  layout(title = "Subgroups", scene = list(xaxis=axx,yaxis=axy,zaxis=axz)) %>% 
+  config(displaylogo = FALSE)
+pClusters3d
+```
+
+
+### Outcome
+
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+pOutcome2d <- plot_ly(x = resultsClustering$ind$coord[,1], y = resultsClustering$ind$coord[,2],
+              color = as.factor(data_analysis_metadata$Outcome),
+              # colors = brewer.pal(n = 2, name = "Dark2"),
+              colors = c("#99004C", "#004C99"),
+              size = I(markerSize2ddiamond),
+              text = paste0("Patient ID: ",rownames(resultsClustering$ind$coord),"\n Age:",resultsClustering$sizes),
+              marker = list(sizemode = 'area', symbol = "diamond"),
+              scene = 'sceneOutcome') %>%
+  layout(title = "Outcome", xaxis = axx, yaxis = axy) %>%
+  add_markers() %>% 
+  config(displaylogo = FALSE)
+pOutcome2d
+```
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+pOutcome3d <- plot_ly(x = resultsClustering$ind$coord[,1], y = resultsClustering$ind$coord[,2], z = resultsClustering$ind$coord[,3],
+                      color = as.factor(data_analysis_metadata$Outcome),
+                      colors = c("#99004C", "#004C99"),
+                      type = "scatter3d", mode = "markers",
+                      # size = I(resultsClustering$sizes*20),
+                      size = I(markerSize3ddiamond),
+                      text = paste0("Patient ID: ",rownames(resultsClustering$ind$coord),"\n Age:",resultsClustering$sizes),
+                      marker = list(sizemode = 'area', symbol = "diamond"),
+                      scene = 'sceneOutcome') %>%
+  layout(title = "Outcome", scene = list(xaxis=axx,yaxis=axy,zaxis=axz)) %>% 
+  config(displaylogo = FALSE)
+pOutcome3d
+```
+
+### Country
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+pCountry2d <- plot_ly(x = resultsClustering$ind$coord[,1], y = resultsClustering$ind$coord[,2],
+              color = as.factor(data_analysis_metadata$country),
+              colors = brewer.pal(n = length(unique(data_analysis_metadata$country)), name = "Set1"),
+              size = I(markerSize2d), type = "scatter", mode = "markers",
+              text = paste0("Patient ID: ",rownames(resultsClustering$ind$coord),"\n Age:",resultsClustering$sizes),
+              marker = list(sizemode = 'area'),
+              scene = 'sceneCountry') %>%
+  layout(title = "Country", xaxis = axx, yaxis = axy) %>% 
+  config(displaylogo = FALSE)
+pCountry2d
+```
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+pCountry3d <- plot_ly(x = resultsClustering$ind$coord[,1], y = resultsClustering$ind$coord[,2], z = resultsClustering$ind$coord[,3],
+              color = as.factor(data_analysis_metadata$country),
+              colors = brewer.pal(n = length(unique(data_analysis_metadata$country)), name = "Set1"),
+              type = "scatter3d", mode = "markers",
+              # size = I(resultsClustering$sizes*20),
+              size = I(markerSize3d),
+              text = paste0("Patient ID: ",rownames(resultsClustering$ind$coord),"\n Age:",resultsClustering$sizes),
+              marker = list(sizemode = 'area'),
+              scene = 'sceneCountry') %>%
+  layout(title = "Country", scene = list(xaxis=axx,yaxis=axy,zaxis=axz)) %>% 
+  config(displaylogo = FALSE)
+pCountry3d
+```
+
+## Symptoms, comorbidities and age plots by subgroup
+
+Calculate required statistics.
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+alphaci = 0.05
+uniqueGroups = unique(resultsClustering$groups)
+nSubgroups = length(uniqueGroups)
+resultsBySubgroup = vector("list",length(uniqueGroups))
+# colnames(data_analysis) = substr(colnames(data_analysis),3,nchar(colnames(data_analysis)))
+
+for (i in 1:length(uniqueGroups)){
+  
+  patientGroupIdx = resultsClustering$groups %in% uniqueGroups[i]
+  nPatientsGroup = sum(patientGroupIdx)
+  
+  data_analysis_subgroup = data_analysis[patientGroupIdx,,drop = FALSE]
+  nind = nrow(data_analysis_subgroup)
+  resultsSymptoms = sapply(data.frame(data_analysis_subgroup[,1:ncol(symptomsVector), drop = FALSE]), function(x) pCI(x, alphaci)*100)
+  colnames(resultsSymptoms) = str_replace_all(colnames(resultsSymptoms),"\\.", " ")
+  resultsSymptomsErr = resultsSymptoms[3,] - resultsSymptoms[1,]
+  
+  resultsComorbidities = sapply(data.frame(data_analysis_subgroup[,-(1:ncol(symptomsVector)), drop = FALSE]), function(x) pCI(x, alphaci)*100)
+  colnames(resultsComorbidities) = str_replace_all(colnames(resultsComorbidities),"\\.", " ")
+  resultsComorbiditiesErr = resultsComorbidities[3,] - resultsComorbidities[1,]
+  
+  # sex, age, recovered statistics
+  data_analysis_metadata_subgroup = data_analysis_metadata[patientGroupIdx,, drop = FALSE]
+  femaleStats = pCI(as.character(data_analysis_metadata_subgroup$sex) %in% 'female',alphaci)*100
+  ageMean = mean(data_analysis_metadata_subgroup$ageNum)
+  ageErr = qnorm(0.975)*sd(data_analysis_metadata_subgroup$ageNum)/sqrt(nPatientsGroup)
+  ageStats = c(ageMean, ageErr)
+  recoveredStats = pCI(data_analysis_metadata_subgroup$Outcome == 'Recovered',alphaci)*100
+  
+  subgroupResults = list(name = paste("Subgroup", i), symptoms = resultsSymptoms, comorbidities = resultsComorbidities, symptomsErr = resultsSymptomsErr, comorbiditiesErr = resultsComorbiditiesErr, nPatientsGroup = nPatientsGroup, femaleStats = femaleStats, recoveredStats = recoveredStats, ageStats = ageStats)
+  resultsBySubgroup[[i]] <- subgroupResults
+}
+```
+
+### Symptoms 
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+resultsStats = lapply(resultsBySubgroup, function(x) x$symptoms)
+resultsStatsMean = unlist(lapply(resultsStats, function(x) x[1,]))
+resultsStatsErr = unlist(lapply(resultsBySubgroup, function(x) x$symptomsErr))
+
+subgroupIds = 1:length(resultsBySubgroup)
+groupColors = colorRampPalette(brewer.pal(nSubgroups,"Set2"))(nSubgroups)
+
+i = 1
+pSymptomsBar <- plot_ly(x = colnames(resultsStats[[i]]), y = resultsStats[[i]][1,], type = 'bar', name = paste("Subgroup", i),
+             marker = list(color = groupColors[i]),
+             error_y = list(type = "data",
+                            array = pmin(100-resultsStats[[i]][1,],resultsBySubgroup[[i]]$symptomsErr),
+                            arrayminus = pmin(resultsStats[[i]][1,],resultsBySubgroup[[i]]$symptomsErr),
+                            color = '#888888'))
+for (i in 2:length(uniqueGroups)){
+  pSymptomsBar <- pSymptomsBar  %>% add_trace(x = colnames(resultsStats[[i]]), y = resultsStats[[i]][1,], type = 'bar', name = paste("Subgroup", i),
+                        marker = list(color = groupColors[i]),
+                        error_y = list(type = "data",
+                                       array = pmin(100-resultsStats[[i]][1,],resultsBySubgroup[[i]]$symptomsErr),
+                                       arrayminus = pmin(resultsStats[[i]][1,],resultsBySubgroup[[i]]$symptomsErr),
+                                       color = '#888888'))  
+}
+# config(displayModeBar = FALSE) %>%
+pSymptomsBar <- pSymptomsBar  %>% layout(title = sprintf("Symptoms by subgroup"),
+       xaxis = list(title = "Symptoms"),
+       yaxis = list(title = "% (CI 95%)"),
+       barmode = 'group'
+) %>% 
+  config(displaylogo = FALSE)
+
+pSymptomsBar
+```
+
+### Comorbidities
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+resultsStats = lapply(resultsBySubgroup, function(x) x$comorbidities)
+resultsStatsMean = unlist(lapply(resultsStats, function(x) x[1,]))
+resultsStatsErr = unlist(lapply(resultsBySubgroup, function(x) x$comorbiditiesErr))
+
+subgroupIds = 1:length(resultsBySubgroup)
+groupColors = colorRampPalette(brewer.pal(nSubgroups,"Set2"))(nSubgroups)
+
+i = 1
+pComorbiditiesBar <- plot_ly(x = colnames(resultsStats[[i]]), y = resultsStats[[i]][1,], type = 'bar', name = paste("Subgroup", i),
+             marker = list(color = groupColors[i]),
+             error_y = list(symmetric = FALSE,
+                            type = "data",
+                            array = pmin(100-resultsStats[[i]][1,],resultsBySubgroup[[i]]$comorbiditiesErr),
+                            arrayminus = pmin(resultsStats[[i]][1,],resultsBySubgroup[[i]]$comorbiditiesErr),
+                            color = '#888888'))
+for (i in 2:length(uniqueGroups)){
+  pComorbiditiesBar <- pComorbiditiesBar  %>% add_trace(x = colnames(resultsStats[[i]]), y = resultsStats[[i]][1,], type = 'bar', name = paste("Subgroup", i),
+                        marker = list(color = groupColors[i]),
+                        error_y = list(type = "data",
+                                       array = pmin(100-resultsStats[[i]][1,],resultsBySubgroup[[i]]$comorbiditiesErr),
+                                       arrayminus = pmin(resultsStats[[i]][1,],resultsBySubgroup[[i]]$comorbiditiesErr),
+                                       color = '#888888')) 
+}
+# config(displayModeBar = FALSE) %>%
+pComorbiditiesBar <- pComorbiditiesBar  %>% layout(title = sprintf("Comorbidities by subgroup"),
+                   xaxis = list(title = "Comorbidities"),
+                   yaxis = list(title = "% (CI 95%)"),
+                   barmode = 'group'
+) %>% 
+  config(displaylogo = FALSE)
+
+pComorbiditiesBar
+```
+
+
+### Age
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+pAges <- plot_ly(x = resultsClustering$groups, y = data_analysis_metadata$ageNum, split = paste("Subgroup", resultsClustering$groups),
+    type = 'box',
+    color = groupColors
+  ) 
+
+pAges <- plot_ly(x = resultsClustering$groups, y = data_analysis_metadata$ageNum,
+                 type = 'box',
+                 color = paste("Subgroup", resultsClustering$groups),
+                 colors = groupColors
+) 
+
+pAges <- pAges %>%
+  layout(
+    title = "Age by subgroup",
+    xaxis = list(
+      title = "Subgroup"
+    ),
+    yaxis = list(
+      title = "Age",
+      zeroline = F
+    )
+  ) %>% 
+  config(displaylogo = FALSE)
+```
+
+
+## Detailed results table
+
+```{r}
+alphaci = 0.05
+uniqueGroups = unique(resultsClustering$groups)
+resultsTable = data.frame(matrix(nrow = ncol(data_analysis)+6, ncol = length(uniqueGroups)))
+
+colnames(data_analysis) = substr(colnames(data_analysis),3,nchar(colnames(data_analysis)))
+colnames(data_analysis) = make.names(colnames(data_analysis), unique = TRUE)
+colnames(data_analysis) = str_replace_all(colnames(data_analysis),"_", " ")
+
+# Note: this (whihout make.names) returns an error when same text is in symptoms and comorbidities, a solution might be using a column for names, or avoid repated terms
+rownames(resultsTable) <- c(sprintf('No. of individuals (n<sub>total</sub> = %d)', nrow(data_analysis)), colnames(data_analysis), 'Females','Age','Recovered','% valid survival (deceased)','Survival days (deceased)')
+colnames(resultsTable) <- paste('Subgroup',uniqueGroups)
+
+for (i in 1:length(uniqueGroups)){
+  
+  patientGroupIdx = resultsClustering$groups %in% uniqueGroups[i]
+  nPatientsGroup = sum(patientGroupIdx)
+  
+  # comorbidity statistics
+  data_analysis_subgroup = data_analysis[patientGroupIdx,,drop = FALSE]
+  nind = nrow(data_analysis_subgroup)
+  data_analysis_subgroupT = t(data_analysis_subgroup)
+  resultsS = sapply(data.frame(data_analysis_subgroup), function(x) pCI(x, alphaci)*100)
+  subgroupResultColumn = apply(resultsS, 2, function(x) sprintf('%.2f (%.2f-%.2f)',x[1],x[2],x[3]))
+  
+  # sex, age, recovered statistics
+  data_analysis_metadata_subgroup = data_analysis_metadata[patientGroupIdx,]
+  #sexProportions = table(corpusSex[patientGroupIdx])/nPatientsGroup
+  femaleStats = pCI(as.character(data_analysis_metadata_subgroup$sex) %in% 'female',alphaci)*100
+  # ageMean = mean(data_analysis_metadata_subgroup$ageNum)
+  ageStats = mCI(data_analysis_metadata_subgroup$ageNum, alphaci)
+  recoveredStats = pCI(data_analysis_metadata_subgroup$Outcome == 'Recovered',alphaci)*100
+  survivalStats = mCI(data_analysis_metadata_subgroup$date_death_or_discharge_difsym[data_analysis_metadata_subgroup$Outcome == 'Deceased'], alphaci, na.rm = TRUE)
+    
+  # compile final result column
+  subgroupResultColumn = c(as.character(nPatientsGroup), subgroupResultColumn, sprintf('%.2f (%.2f-%.2f)',femaleStats[1],femaleStats[2],femaleStats[3]), sprintf('%.2f (%.2f-%.2f)',ageStats[1],ageStats[2],ageStats[3]), sprintf('%.2f (%.2f-%.2f)',recoveredStats[1],recoveredStats[2],recoveredStats[3]))
+  #names(subgroupResultColumn)[c(1,length(subgroupResultColumn)-1,length(subgroupResultColumn))] <- c('n','Females','Median birth date')
+  
+  # subgroupResultColumn = c(subgroupResultColumn, sprintf('%.2f',sum(!is.na(data_analysis_metadata_subgroup$date_death_or_discharge_difsym))/nind), sprintf('%.2f', mean(data_analysis_metadata_subgroup$date_death_or_discharge_difsym, na.rm = TRUE)))
+  subgroupResultColumn = c(subgroupResultColumn,
+                           sprintf('%.2f',100*sum(!is.na(data_analysis_metadata_subgroup$date_death_or_discharge_difsym[data_analysis_metadata_subgroup$Outcome == 'Deceased']))/sum(data_analysis_metadata_subgroup$Outcome == 'Deceased')),
+                           # sprintf('%.2f', mean(data_analysis_metadata_subgroup$date_death_or_discharge_difsym[data_analysis_metadata_subgroup$Outcome == 'Deceased'], na.rm = TRUE)))
+                           sprintf('%.2f (%.2f-%.2f)',survivalStats[1],survivalStats[2],survivalStats[3]))
+  
+  resultsTable[i] <- subgroupResultColumn
+}
+
+# names(resultsTable) <- cell_spec(names(resultsTable), background = "yellow")
+
+tTable = kable(resultsTable, format = "html", escape = F) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F) %>%
+  pack_rows("Symptoms (%, CI 95%)", 2, 1+ncol(symptomsVector)) %>%
+  pack_rows("Comorbidities (%, CI 95%)", 2+ncol(symptomsVector), 2+ncol(symptomsVector)+ncol(chronicsVector)-1) %>%
+  pack_rows("Demographics (%|x, CI 95%)", 2+ncol(symptomsVector)+ncol(chronicsVector), 2+ncol(symptomsVector)+ncol(chronicsVector)+1) %>%
+  pack_rows("Outcomes (%|x, CI 95%)", 2+ncol(symptomsVector)+ncol(chronicsVector)+2, 2+ncol(symptomsVector)+ncol(chronicsVector)+3+1)
+
+groupColors = brewer.pal(n = ncol(resultsTable), name = "Set2")
+
+for (i in 1:ncol(resultsTable)) {
+  tTable = tTable %>% column_spec(i+1, background = groupColors[i], include_thead = TRUE) %>%
+    column_spec(i+1, background = "inherit")
+}
+
+tTable
+```
+
+
