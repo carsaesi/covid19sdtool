@@ -32,7 +32,7 @@ For further exploration of the results please visit our [COVID-19 Subgroup Disco
 
 If you use this code please cite:
 
-Carlos Sáez, Nekane Romero, J Alberto Conejero, Juan M García-Gómez. Potential Biases in COVID-19 Machine Learning due to Data Source Variability. Submitted.
+Carlos Sáez, Nekane Romero, J Alberto Conejero, Juan M García-Gómez, Potential limitations in COVID-19 machine learning due to data source variability: A case study in the nCov2019 dataset, Journal of the American Medical Informatics Association, ocaa258, https://doi.org/10.1093/jamia/ocaa258
 
 
 ## Credits
