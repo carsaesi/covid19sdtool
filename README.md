@@ -39,7 +39,7 @@ Carlos Sáez, Nekane Romero, J Alberto Conejero, Juan M García-Gómez, Potentia
 
 * __Version__: 1.0.0
 * __Authors__: Carlos Sáez (UPV), Nekane Romero (UPV), J Alberto Conejero (UPV), Juan M García-Gómez (UPV)
-* __Maintainer__: Carlos Sáez (UPV-HMS)
+* __Maintainer__: Carlos Sáez (UPV)
  
 Copyright: 2020 - Biomedical Data Science Lab, Universitat Politècnica de Valècia, Spain (UPV)
 
